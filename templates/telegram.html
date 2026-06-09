@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <div class="product-detail-layout">
+
+        <div class="pink-card">
+            <div class="section-header">
+                <div>
+                    <h2>
+                        <i class="bi bi-send-heart"></i>
+                        Telegram
+                    </h2>
+                    <p class="soft-text">Відправлені товари та ручне створення постів.</p>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="pink-card">
+            <div class="section-header">
+                <h2>
+                    <i class="bi bi-pencil-square"></i>
+                    Створити пост вручну
+                </h2>
+            </div>
+
+            <form action="{{ url_for('telegram_custom_send') }}" method="POST">
+
+                <label class="form-label">Текст поста</label>
+                <textarea
+                        name="post_text"
+                        class="telegram-textarea"
+                        rows="10"
+                        placeholder="Введіть текст поста..."
+                        required
+                ></textarea>
+
+                <label class="form-label mt-3">Фото посиланнями</label>
+                <textarea
+                        name="photo_urls"
+                        class="telegram-textarea"
+                        rows="6"
+                        placeholder="Кожне фото з нового рядка:
+https://example.com/photo1.jpg
+https://example.com/photo2.jpg"
+                ></textarea>
+
+                <div class="actions-row">
+                    <button type="submit" class="btn btn-main">
+                        <i class="bi bi-send-fill"></i>
+                        Відправити пост
+                    </button>
+                </div>
+
+            </form>
+        </div>
+
+
+        <div class="pink-card">
+            <div class="section-header">
+                <h2>
+                    <i class="bi bi-check-circle"></i>
+                    Відправлені товари
+                </h2>
+            </div>
+
+            {% if sent_products %}
+                <div class="products-list">
+                    {% for item in sent_products %}
+                        {% set product = item.product %}
+
+                        <a href="{{ url_for('product_detail', product_index=item.index) }}"
+                           class="product-row product-row-link">
+                            <div class="product-thumb">
+                                {% if product.images and product.images|length > 0 %}
+                                    <img src="{{ product.images[0] }}" alt="{{ product.title }}">
+                                {% else %}
+                                    🛍️
+                                {% endif %}
+                            </div>
+
+                            <div class="product-info">
+                                <h5>{{ product.title }}</h5>
+                                <p>
+                                    {% if product.brand %}
+                                        {{ product.brand }}
+                                    {% endif %}
+
+                                    {% if product.article %}
+                                        · {{ product.article }}
+                                    {% endif %}
+                                </p>
+                            </div>
+
+                            <span class="badge-category">{{ product.category_type }}</span>
+
+                            <div class="price-old">{{ product.old_price }}</div>
+                            <div class="price-new">{{ product.new_price }}</div>
+
+                            <span class="status-ready">Відправлено</span>
+                        </a>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="empty-state">
+                    <div class="empty-icon">📨</div>
+                    <h4>Ще немає відправлених товарів</h4>
+                    <p>Після відправки в Telegram товари з’являться тут.</p>
+                </div>
+            {% endif %}
+        </div>
+
+
+        <div class="pink-card">
+            <div class="section-header">
+                <h2>
+                    <i class="bi bi-card-text"></i>
+                    Ручні пости
+                </h2>
+            </div>
+
+            {% if custom_posts %}
+                <div class="variant-groups">
+                    {% for post in custom_posts %}
+                        <div class="variant-group-card">
+                            <h4>Ручний пост</h4>
+
+                            <textarea class="telegram-textarea" rows="8" readonly>{{ post.text }}</textarea>
+
+                            {% if post.photo_urls and post.photo_urls|length > 0 %}
+                                <div class="detail-gallery mt-3">
+                                    {% for photo in post.photo_urls %}
+                                        <div class="detail-image-box">
+                                            <img src="{{ photo }}" alt="post photo">
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+
+                            <span class="status-ready">Відправлено</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p class="soft-text">Ручних постів ще немає.</p>
+            {% endif %}
+        </div>
+
+    </div>
+
+{% endblock %}

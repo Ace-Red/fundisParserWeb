@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div class="pink-card products-card full-width-card">
+    <div class="section-header">
+        <div>
+            <h2>
+                <i class="bi bi-bag-heart"></i>
+                Знайдені товари
+            </h2>
+            <p class="soft-text">Натисніть на товар, щоб завантажити детальну інформацію.</p>
+        </div>
+
+        <a href="/" class="btn btn-outline-pink">
+            <i class="bi bi-arrow-left"></i>
+            На головну
+        </a>
+    </div>
+
+    {% if indexed_products %}
+        <div class="products-list">
+            {% for item in indexed_products %}
+                {% set product = item.product %}
+
+                <a href="{{ url_for('product_detail', product_index=item.index) }}" class="product-row product-row-link">
+                    <div class="product-thumb">
+                        {% if product.images and product.images|length > 0 %}
+                            <img src="{{ product.images[0] }}" alt="{{ product.title }}">
+                        {% else %}
+                            🛍️
+                        {% endif %}
+                    </div>
+
+                    <div class="product-info">
+                        <h5>{{ product.title }}</h5>
+                        <p>
+                            {% if product.brand %}
+                                {{ product.brand }}
+                            {% endif %}
+
+                            {% if product.article %}
+                                · {{ product.article }}
+                            {% endif %}
+                        </p>
+                    </div>
+
+                    <span class="badge-category">{{ product.category_type }}</span>
+
+                    <div class="price-old">{{ product.old_price }}</div>
+                    <div class="price-new">{{ product.new_price }}</div>
+
+                    {% if product.detail_parsed %}
+                        <span class="status-ready">Деталі є</span>
+                    {% else %}
+                        <span class="status-draft">Прев’ю</span>
+                    {% endif %}
+                </a>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <div class="empty-icon">🦄</div>
+            <h4>Товарів поки немає</h4>
+            <p>Запустіть парсинг категорії, і товари з’являться тут.</p>
+        </div>
+    {% endif %}
+</div>
+
+{% endblock %}

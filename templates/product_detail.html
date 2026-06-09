@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <div class="product-detail-layout">
+
+        <!-- Верхняя карточка товара -->
+        <div class="pink-card">
+
+            <div class="section-header">
+                <div>
+                    <h2>{{ product.title }}</h2>
+
+                    <p class="soft-text">
+                        {% if product.brand %}
+                            {{ product.brand }}
+                        {% endif %}
+
+                        {% if product.article %}
+                            · {{ product.article }}
+                        {% endif %}
+                    </p>
+                </div>
+
+                <a href="/products" class="btn btn-outline-pink">
+                    <i class="bi bi-arrow-left"></i>
+                    До товарів
+                </a>
+            </div>
+
+            <!-- Фото товара -->
+            <div class="detail-gallery">
+                {% if product.images and product.images|length > 0 %}
+                    {% for image in product.images[:12] %}
+                        <div class="detail-image-box">
+                            <img src="{{ image }}" alt="{{ product.title }}">
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty-state">
+                        <div class="empty-icon">📷</div>
+                        <p>Фото не знайдені.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Цена товара -->
+            <div class="detail-price-box">
+                {% if product.discount %}
+                    <span class="detail-discount">{{ product.discount }}</span>
+                {% endif %}
+
+                {% if product.old_price %}
+                    <span class="detail-old-price">{{ product.old_price }}</span>
+                {% endif %}
+
+                {% if product.new_price %}
+                    <span class="detail-new-price">{{ product.new_price }}</span>
+                {% endif %}
+            </div>
+
+            <!-- Наличие / количество -->
+            {% if product.stock %}
+                <div class="detail-stock-box">
+                    {% if product.stock.is_buyable %}
+                        <span class="status-ready">Можна додати в кошик</span>
+                    {% else %}
+                        <span class="status-draft">Потрібно вибрати варіанти</span>
+                    {% endif %}
+
+                    {% if product.stock.max_quantity %}
+                        <span class="soft-text">
+                        Максимальна кількість: {{ product.stock.max_quantity }}
+                    </span>
+                    {% endif %}
+
+                    {% if product.stock.delivery_text %}
+                        <span class="soft-text">
+                        {{ product.stock.delivery_text }}
+                    </span>
+                    {% endif %}
+                </div>
+            {% endif %}
+
+            <div class="actions-row">
+                <form action="{{ url_for('refresh_product_detail', product_index=product_index) }}" method="POST">
+                    <button type="submit" class="btn btn-main">
+                        <i class="bi bi-arrow-clockwise"></i>
+                        Оновити деталі
+                    </button>
+                </form>
+
+                <form action="{{ url_for('delete_product', product_index=product_index) }}" method="POST">
+                    <button type="submit" class="btn btn-outline-pink">
+                        <i class="bi bi-trash"></i>
+                        Видалити
+                    </button>
+                </form>
+            </div>
+
+        </div>
+
+
+        <!-- Цвета и доступные размеры -->
+        <div class="pink-card">
+
+            <div class="section-header">
+                <h2>
+                    <i class="bi bi-palette-heart"></i>
+                    Кольори та доступні розміри
+                </h2>
+            </div>
+
+            {% if product.color_details and product.color_details|length > 0 %}
+
+                <div class="color-detail-grid">
+
+                    {% for color in product.color_details %}
+
+                        <div class="color-detail-card">
+
+                            <!-- Фото цвета -->
+                            <div class="color-detail-image">
+                                {% if color.main_image %}
+                                    <img src="{{ color.main_image }}" alt="{{ color.name }}">
+                                {% elif color.images and color.images|length > 0 %}
+                                    <img src="{{ color.images[0] }}" alt="{{ color.name }}">
+                                {% else %}
+                                    🛍️
+                                {% endif %}
+                            </div>
+
+                            <!-- Информация цвета -->
+                            <div class="color-detail-info">
+
+                                <h3>
+                                    {% if color.name and color.name|lower != "default" %}
+                                        {{ color.name }}
+                                    {% else %}
+                                        Колір не вказано
+                                    {% endif %}
+                                </h3>
+
+                                {% if color.article %}
+                                    <p class="soft-text">
+                                        Артикул: {{ color.article }}
+                                    </p>
+                                {% endif %}
+
+                                <!-- Цена цвета -->
+                                <div class="detail-price-box small-price-box">
+                                    {% if color.discount %}
+                                        <span class="detail-discount">{{ color.discount }}</span>
+                                    {% endif %}
+
+                                    {% if color.old_price %}
+                                        <span class="detail-old-price">{{ color.old_price }}</span>
+                                    {% endif %}
+
+                                    {% if color.new_price %}
+                                        <span class="detail-new-price">{{ color.new_price }}</span>
+                                    {% endif %}
+                                </div>
+
+                                <!-- Наличие цвета -->
+                                {% if color.stock %}
+                                    <div class="detail-stock-box color-stock-box">
+                                        {% if color.stock.is_buyable %}
+                                            <span class="status-ready">В наявності</span>
+                                        {% else %}
+                                            <span class="status-draft">Потрібно вибрати варіанти</span>
+                                        {% endif %}
+
+                                        {% if color.stock.max_quantity %}
+                                            <span class="soft-text">
+                                            Максимальна кількість: {{ color.stock.max_quantity }}
+                                        </span>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+
+                                <!-- Группы вариантов: size / height / width / length -->
+                                {% if color.option_groups and color.option_groups|length > 0 %}
+
+                                    <div class="color-options-list">
+
+                                        {% for group in color.option_groups %}
+
+                                            <div class="color-option-group">
+
+                                                <h4>{{ group.name }}</h4>
+
+                                                {% if group.available_values and group.available_values|length > 0 %}
+
+                                                    <div class="variant-options">
+                                                        {% for value in group.available_values %}
+                                                            <div class="variant-option available">
+                                                                <span>{{ value }}</span>
+                                                                <small>В наявності</small>
+                                                            </div>
+                                                        {% endfor %}
+                                                    </div>
+
+                                                {% else %}
+
+                                                    <p class="soft-text">
+                                                        Немає доступних значень.
+                                                    </p>
+
+                                                {% endif %}
+
+                                            </div>
+
+                                        {% endfor %}
+
+                                    </div>
+
+                                {% else %}
+
+                                    <p class="soft-text">
+                                        Для цього варіанта окремі розміри не знайдені.
+                                    </p>
+
+                                {% endif %}
+
+                            </div>
+
+                        </div>
+
+                    {% endfor %}
+
+                </div>
+
+            {% else %}
+
+                <div class="empty-state">
+                    <div class="empty-icon">🎨</div>
+                    <p>Інформацію по кольорах ще не завантажено.</p>
+                </div>
+
+            {% endif %}
+
+        </div>
+
+
+        <!-- Текст для Telegram -->
+        <!-- Текст для Telegram -->
+        <div class="pink-card">
+
+            <div class="section-header">
+                <h2>
+                    <i class="bi bi-send-heart"></i>
+                    Текст для Telegram
+                </h2>
+
+                {% if product.telegram_sent %}
+                    <span class="status-ready">Вже відправлено</span>
+                {% endif %}
+            </div>
+
+            <textarea class="telegram-textarea" rows="15" readonly>{{ product.telegram_text }}</textarea>
+
+            <div class="actions-row">
+                <form action="{{ url_for('send_product_telegram', product_index=product_index) }}" method="POST">
+                    <button type="submit" class="btn btn-main">
+                        <i class="bi bi-send-fill"></i>
+                        Відправити в Telegram
+                    </button>
+                </form>
+            </div>
+
+        </div>
+
+    </div>
+
+{% endblock %}
