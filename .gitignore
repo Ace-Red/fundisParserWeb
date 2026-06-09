@@ -1,0 +1,9 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+debug_detail_page.html
+debug_last_tried_detail_page.html
+static/product_images/

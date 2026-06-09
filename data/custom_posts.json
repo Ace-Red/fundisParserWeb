@@ -1,0 +1,76 @@
+[
+    {
+        "text": "Бляяяяяяя ебаааанннныыыыы в роооооотттттт еееебббааааннннныыыый фуууунддддиииссс еееееееббббббаааааннннннныыыыййййй",
+        "photo_urls": [
+            "https://iv.okcdn.ru/getVideoPreview?id=7326126967314&idx=2&type=39&tkn=iMgBJvOP49meO5BBQwXAk2TRaG8&fn=vid_w"
+        ],
+        "telegram_result": {
+            "photos": {
+                "ok": true,
+                "result": {
+                    "message_id": 111,
+                    "sender_chat": {
+                        "id": -1003795884802,
+                        "title": "Boutique Cavalier | Sale",
+                        "type": "channel"
+                    },
+                    "chat": {
+                        "id": -1003795884802,
+                        "title": "Boutique Cavalier | Sale",
+                        "type": "channel"
+                    },
+                    "date": 1781045579,
+                    "photo": [
+                        {
+                            "file_id": "AgACAgQAAyEGAATiQJsCAANvaiiZS3dOmYbMyOhLJaFa5JnnEFAAAv8Maxt7D11RrP8DerEdAAFdAQADAgADcwADOwQ",
+                            "file_unique_id": "AQAD_wxrG3sPXVF4",
+                            "file_size": 1159,
+                            "width": 90,
+                            "height": 67
+                        },
+                        {
+                            "file_id": "AgACAgQAAyEGAATiQJsCAANvaiiZS3dOmYbMyOhLJaFa5JnnEFAAAv8Maxt7D11RrP8DerEdAAFdAQADAgADbQADOwQ",
+                            "file_unique_id": "AQAD_wxrG3sPXVFy",
+                            "file_size": 10885,
+                            "width": 320,
+                            "height": 240
+                        },
+                        {
+                            "file_id": "AgACAgQAAyEGAATiQJsCAANvaiiZS3dOmYbMyOhLJaFa5JnnEFAAAv8Maxt7D11RrP8DerEdAAFdAQADAgADeQADOwQ",
+                            "file_unique_id": "AQAD_wxrG3sPXVF-",
+                            "file_size": 33574,
+                            "width": 960,
+                            "height": 720
+                        },
+                        {
+                            "file_id": "AgACAgQAAyEGAATiQJsCAANvaiiZS3dOmYbMyOhLJaFa5JnnEFAAAv8Maxt7D11RrP8DerEdAAFdAQADAgADeAADOwQ",
+                            "file_unique_id": "AQAD_wxrG3sPXVF9",
+                            "file_size": 39664,
+                            "width": 800,
+                            "height": 600
+                        }
+                    ]
+                }
+            },
+            "message": {
+                "ok": true,
+                "result": {
+                    "message_id": 112,
+                    "sender_chat": {
+                        "id": -1003795884802,
+                        "title": "Boutique Cavalier | Sale",
+                        "type": "channel"
+                    },
+                    "chat": {
+                        "id": -1003795884802,
+                        "title": "Boutique Cavalier | Sale",
+                        "type": "channel"
+                    },
+                    "date": 1781045579,
+                    "text": "Бляяяяяяя ебаааанннныыыыы в роооооотттттт еееебббааааннннныыыый фуууунддддиииссс еееееееббббббаааааннннннныыыыййййй"
+                }
+            }
+        },
+        "status": "sent"
+    }
+]

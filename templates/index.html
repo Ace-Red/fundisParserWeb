@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+    <section class="content-grid one-column">
+
+        <div class="left-column">
+
+            <div class="pink-card add-link-card">
+                <div class="card-title-row">
+                    <div>
+                        <h2>
+                            <i class="bi bi-link-45deg"></i>
+                            Додати посилання на категорію
+                        </h2>
+                        <p>Вставте посилання Fundis з фільтрами, брендами або сторінкою Sale.</p>
+                    </div>
+                    <span class="sparkle">✨</span>
+                </div>
+
+                <form action="/parse" method="POST">
+
+                    <div class="form-row">
+
+                        <div class="category-box">
+                            <label class="form-label">Тип категорії</label>
+
+                            <div class="category-buttons">
+                                <input type="radio" class="btn-check" name="category_type" id="sale" value="Sale"
+                                       checked>
+                                <label class="category-btn" for="sale">Sale</label>
+
+                                <input type="radio" class="btn-check" name="category_type" id="deal" value="Deal">
+                                <label class="category-btn" for="deal">Deal</label>
+                            </div>
+                        </div>
+
+                        <div class="url-box">
+                            <label class="form-label">Посилання</label>
+                            <div class="input-with-icon">
+                                <i class="bi bi-link"></i>
+                                <input
+                                        type="url"
+                                        name="category_url"
+                                        class="form-control cute-input"
+                                        placeholder="Вставте посилання на категорію..."
+                                        required
+                                >
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div class="actions-row">
+                        <button type="submit" class="btn btn-main">
+                            <i class="bi bi-rocket-takeoff-fill"></i>
+                            Запустити парсинг
+                        </button>
+
+                        <a href="/products" class="btn btn-outline-pink">
+                            <i class="bi bi-eye"></i>
+                            Переглянути товари
+                        </a>
+                    </div>
+
+                </form>
+            </div>
+
+            <div class="pink-card products-card">
+                <div class="section-header">
+                    <h2>
+                        <i class="bi bi-bag-heart"></i>
+                        Останні товари
+                    </h2>
+
+                    <a href="/products">Переглянути всі</a>
+                </div>
+
+                {% if latest_products %}
+                    <div class="products-list">
+                        {% for product in latest_products %}
+                            <a href="/products" class="product-row product-row-link">
+                                <div class="product-thumb">
+                                    {% if product.images and product.images|length > 0 %}
+                                        <img src="{{ product.images[0] }}" alt="{{ product.title }}">
+                                    {% else %}
+                                        🛍️
+                                    {% endif %}
+                                </div>
+
+                                <div class="product-info">
+                                    <h5>{{ product.title }}</h5>
+                                    <p>{{ product.article }}</p>
+                                </div>
+
+                                <span class="badge-category">{{ product.category_type }}</span>
+
+                                <div class="price-old">{{ product.old_price }}</div>
+                                <div class="price-new">{{ product.new_price }}</div>
+
+                                <span class="status-ready">Готово</span>
+
+
+                            </a>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state">
+                        <div class="empty-icon">🦄</div>
+                        <h4>Товарів поки немає</h4>
+                        <p>Додайте посилання на категорію, і тут з’являться знайдені товари.</p>
+                    </div>
+                {% endif %}
+            </div>
+
+        </div>
+
+
+    </section>
+
+{% endblock %}
