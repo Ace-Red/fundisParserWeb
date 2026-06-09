@@ -1,149 +1,467 @@
+import os
 import re
-import json
 import html
-from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
-import html
+import time
 import requests
+
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 from parser.storage import is_seen_link, is_blocked_link
-from parser.telegram_sender import send_telegram_photo, send_telegram_media_group, send_telegram_message
+
+
+BASE_URL = "https://www.fundis-equestrian.com"
 
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "en-US,en;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
 }
 
 
 # ============================================================
-# Базові функції
+# BASIC HELPERS
 # ============================================================
 
+def clean_text(value: str) -> str:
+    if value is None:
+        return ""
+
+    value = html.unescape(str(value))
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
 def normalize_url(url: str) -> str:
-    url = html.unescape((url or "").strip())
-    parsed = urlparse(url)
-    return parsed._replace(fragment="").geturl()
-
-
-def clean_text(text: str) -> str:
-    if not text:
+    if not url:
         return ""
 
-    text = html.unescape(str(text))
-    text = text.replace("*", " ")
-    text = " ".join(text.split())
+    url = html.unescape(url.strip())
 
-    return text.strip()
+    if url.startswith("//"):
+        return "https:" + url
 
+    if url.startswith("/"):
+        return urljoin(BASE_URL, url)
 
-def get_first_src_from_srcset(srcset: str) -> str:
-    if not srcset:
-        return ""
-
-    first = srcset.split(",")[0].strip()
-    return first.split(" ")[0].strip()
+    return url
 
 
-def unique_list(items: list[str]) -> list[str]:
+def remove_query_from_url(url: str) -> str:
+    parsed_url = urlparse(url)
+
+    return urlunparse(
+        (
+            parsed_url.scheme,
+            parsed_url.netloc,
+            parsed_url.path,
+            "",
+            "",
+            "",
+        )
+    )
+
+
+def unique_list(values: list[str]) -> list[str]:
     result = []
+    seen = set()
 
-    for item in items:
-        if item and item not in result:
-            result.append(item)
+    for value in values:
+        if not value:
+            continue
+
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
 
     return result
 
 
+def get_first_url_from_srcset(srcset: str) -> str:
+    if not srcset:
+        return ""
+
+    first_part = srcset.split(",")[0].strip()
+    first_url = first_part.split(" ")[0].strip()
+
+    return normalize_url(first_url)
+
+
+def image_to_large_url(image_url: str) -> str:
+    """
+    Пробуємо замінити маленькі thumbnail-фото на більші.
+    """
+
+    if not image_url:
+        return ""
+
+    image_url = normalize_url(image_url)
+
+    replacements = [
+        "_200x200@2x",
+        "_200x200",
+        "_600x600@2x",
+        "_600x600",
+    ]
+
+    for replacement in replacements:
+        if replacement in image_url:
+            image_url = image_url.replace(replacement, "_1280x1280")
+
+    image_url = image_url.replace("?class=thumbnail", "")
+
+    return image_url
+
+
+def extract_image_from_tag(tag) -> str:
+    if not tag:
+        return ""
+
+    for attr in [
+        "data-img-large",
+        "data-img-original",
+        "data-srcset",
+        "srcset",
+        "data-src",
+        "src",
+        "href",
+    ]:
+        value = tag.get(attr)
+
+        if not value:
+            continue
+
+        if "srcset" in attr:
+            image_url = get_first_url_from_srcset(value)
+        else:
+            image_url = normalize_url(value)
+
+        if image_url and not image_url.startswith("data:image"):
+            return image_to_large_url(image_url)
+
+    return ""
+
+
+def extract_first_image(container) -> str:
+    if not container:
+        return ""
+
+    image_element = container.select_one("[data-img-large], [data-img-original]")
+
+    if image_element:
+        image_url = extract_image_from_tag(image_element)
+
+        if image_url:
+            return image_url
+
+    image_tag = container.select_one("img")
+
+    if image_tag:
+        image_url = extract_image_from_tag(image_tag)
+
+        if image_url:
+            return image_url
+
+    return ""
+
+
+def clean_price(value: str) -> str:
+    value = clean_text(value)
+
+    value = value.replace("*", "")
+    value = value.replace("Originally:", "")
+    value = value.replace("Ursprünglich:", "")
+    value = value.replace("RRP:", "")
+    value = value.replace("€ ", "€")
+    value = value.replace("€&nbsp;", "€")
+
+    value = re.sub(r"\s+", " ", value)
+
+    return value.strip()
+
+
 def fetch_html(url: str) -> str:
-    response = requests.get(url, headers=HEADERS, timeout=30)
+    url = normalize_url(url)
+
+    response = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=30,
+    )
+
+    if response.status_code == 404:
+        raise Exception("404")
+
     response.raise_for_status()
+
     return response.text
 
 
-def remove_query_from_url(url: str) -> str:
-    parsed = urlparse(url)
+def build_page_url(category_url: str, page_number: int) -> str:
+    """
+    FUNDIS не всегда удобно парсить через кнопку next.
+    Поэтому вручную меняем только p=1, p=2, p=3...
+    Все фильтры сохраняются:
+    o=1, n=24, s=176|192|...
+    """
 
-    return urlunparse(
+    parsed_url = urlparse(category_url)
+    query_params = parse_qs(parsed_url.query)
+
+    query_params["p"] = [str(page_number)]
+
+    new_query = urlencode(query_params, doseq=True)
+
+    new_url = urlunparse(
         (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            "",
-            "",
-            "",
-        )
-    )
-
-
-def set_page_number(url: str, page_number: int) -> str:
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-
-    query["p"] = [str(page_number)]
-
-    new_query = urlencode(query, doseq=True)
-
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
+            parsed_url.scheme,
+            parsed_url.netloc,
+            parsed_url.path,
+            parsed_url.params,
             new_query,
-            parsed.fragment,
+            parsed_url.fragment,
         )
     )
 
-
-def get_page_size_from_url(url: str) -> int:
-    parsed = urlparse(url)
-    query = parse_qs(parsed.query)
-
-    try:
-        return int(query.get("n", ["24"])[0])
-    except Exception:
-        return 24
+    return new_url
 
 
-def extract_prices_from_text(text: str) -> dict:
-    text = clean_text(text)
+# ============================================================
+# CATEGORY PARSER
+# ============================================================
 
-    prices = re.findall(r"€\s?\d+[.,]\d{2}", text)
-    prices = [price.replace("€ ", "€") for price in prices]
+def parse_product_title_and_brand(product_box) -> dict:
+    title_tag = product_box.select_one(".product--title")
+
+    if not title_tag:
+        return {
+            "brand": "",
+            "title": "",
+        }
+
+    brand = ""
+
+    brand_tag = title_tag.select_one("span")
+
+    if brand_tag:
+        brand = clean_text(brand_tag.get_text(" "))
+
+    title_attr = clean_text(title_tag.get("title", ""))
+
+    full_text = clean_text(title_tag.get_text(" "))
+
+    if brand:
+        title = full_text.replace(brand, "", 1).strip()
+    else:
+        title = full_text
+
+    if not title and title_attr:
+        title = title_attr
+
+        if brand:
+            title = title.replace(brand, "", 1).strip()
+
+    return {
+        "brand": brand,
+        "title": title,
+    }
+
+
+def parse_product_box(product_box, category_type: str) -> dict:
+    title_tag = product_box.select_one(".product--title")
+
+    if not title_tag:
+        return {}
+
+    product_url = normalize_url(title_tag.get("href", ""))
+
+    if not product_url:
+        image_link = product_box.select_one("a.product--image")
+
+        if image_link:
+            product_url = normalize_url(image_link.get("href", ""))
+
+    if not product_url:
+        return {}
+
+    title_brand = parse_product_title_and_brand(product_box)
+
+    title = title_brand["title"]
+    brand = title_brand["brand"]
+
+    if not title:
+        title = clean_text(title_tag.get("title", ""))
+
+    article = clean_text(product_box.get("data-ordernumber", ""))
+
+    image_url = ""
+
+    image_container = product_box.select_one(".product--image, .fundis-product-box-img")
+
+    if image_container:
+        image_url = extract_first_image(image_container)
+
+    if not image_url:
+        image_url = extract_first_image(product_box)
 
     new_price = ""
     old_price = ""
 
-    if len(prices) >= 2:
-        new_price = prices[0]
-        old_price = prices[1]
-    elif len(prices) == 1:
-        new_price = prices[0]
+    new_price_tag = product_box.select_one(".price--default")
+
+    if new_price_tag:
+        new_price = clean_price(new_price_tag.get_text(" "))
+
+    old_price_tag = product_box.select_one(".price--pseudo .price--discount")
+
+    if old_price_tag:
+        old_price = clean_price(old_price_tag.get_text(" "))
 
     discount = ""
 
-    discount_match = re.search(r"[-−]?\s?(\d+)\s?%", text)
-    if discount_match:
-        discount = f"-{discount_match.group(1)}%"
+    discount_tag = product_box.select_one(".badge--discount, .product--badge.badge--discount")
+
+    if discount_tag:
+        discount = clean_text(discount_tag.get_text(" "))
+
+    product = {
+        "title": title,
+        "brand": brand,
+        "article": article,
+        "url": product_url,
+        "category_type": category_type,
+        "old_price": old_price,
+        "new_price": new_price,
+        "discount": discount,
+        "images": [image_url] if image_url else [],
+        "colors": [],
+        "color_details": [],
+        "telegram_text": "",
+        "detail_parsed": False,
+        "sent": False,
+        "telegram_sent": False,
+        "deleted": False,
+        "status": "active",
+    }
+
+    return product
+
+
+def parse_category(category_url: str, category_type: str, on_page_products=None) -> dict:
+    page_number = 1
+
+    products_found = 0
+    new_count = 0
+    skipped_count = 0
+    pages_parsed = 0
+
+    previous_page_urls = set()
+    max_pages = 300
+
+    while page_number <= max_pages:
+        page_url = build_page_url(category_url, page_number)
+
+        print("=" * 60)
+        print("Парсимо сторінку:", page_number)
+        print("URL:", page_url)
+
+        try:
+            html_text = fetch_html(page_url)
+        except Exception as error:
+            print("Не вдалося завантажити сторінку:", error)
+            print("Зупиняємо парсинг.")
+            break
+
+        soup = BeautifulSoup(html_text, "html.parser")
+
+        product_boxes = soup.select(".product--box")
+
+        print("Знайдено блоків товарів:", len(product_boxes))
+
+        if not product_boxes:
+            print("Товарів на сторінці немає. Зупиняємо парсинг.")
+            break
+
+        current_page_urls = set()
+        page_products = []
+
+        for product_box in product_boxes:
+            product = parse_product_box(product_box, category_type)
+
+            if not product:
+                continue
+
+            product_url = product.get("url", "")
+
+            if product_url:
+                current_page_urls.add(product_url)
+
+            if is_seen_link(product_url) or is_blocked_link(product_url):
+                skipped_count += 1
+                continue
+
+            page_products.append(product)
+            new_count += 1
+
+        products_found += len(product_boxes)
+        pages_parsed += 1
+
+        print("Нових товарів на сторінці:", len(page_products))
+        print("Пропущено на сторінці:", len(product_boxes) - len(page_products))
+
+        if page_number > 1 and current_page_urls and current_page_urls == previous_page_urls:
+            print("Наступна сторінка повторює попередню. Зупиняємо парсинг.")
+            break
+
+        previous_page_urls = current_page_urls
+
+        if page_products and on_page_products:
+            on_page_products(page_number, page_url, page_products)
+
+        page_number += 1
+
+        time.sleep(0.4)
 
     return {
-        "new_price": new_price,
-        "old_price": old_price,
-        "discount": discount,
+        "pages_parsed": pages_parsed,
+        "products_found": products_found,
+        "new_count": new_count,
+        "skipped_count": skipped_count,
     }
 
 
 # ============================================================
-# Колір з HTML Fundis
+# DETAIL PARSER HELPERS
 # ============================================================
+
+def normalize_variant_group_name(group_name: str) -> str:
+    group_name_clean = clean_text(group_name)
+    group_name_lower = group_name_clean.lower()
+
+    translations = {
+        "größe": "size",
+        "groesse": "size",
+        "size": "size",
+        "color": "color",
+        "colour": "color",
+        "farbe": "color",
+        "lenght": "lenght",
+        "length": "length",
+        "width": "width",
+        "height": "height",
+        "form": "form",
+    }
+
+    return translations.get(group_name_lower, group_name_clean)
+
 
 def parse_selected_color_name_from_html(html_text: str) -> str:
     """
-    Дістаємо вибраний колір із HTML Fundis.
+    Дістаємо вибраний колір із HTML FUNDIS.
 
     Працює з:
     - color
@@ -154,7 +472,7 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
     - перший доступний НЕ disabled input
     """
 
-    html_text = html.unescape(html_text)
+    html_text = html.unescape(html_text or "")
     soup = BeautifulSoup(html_text, "html.parser")
 
     color_group_names = [
@@ -176,10 +494,6 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
 
         variant_name_tag = group.select_one(".variant--name")
 
-        # 1. Найкраще: беремо вибране значення з тексту групи
-        # Наприклад:
-        # Farbe: chalk violet
-        # color: charcoal/grey
         if variant_name_tag:
             variant_text = clean_text(variant_name_tag.get_text(" "))
 
@@ -190,7 +504,6 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
                     print("Колір знайдено через variant--name:", selected_color)
                     return selected_color
 
-        # 2. Якщо є checked input — беремо його
         checked_input = group.select_one("input.option--input[checked]")
 
         if checked_input and checked_input.get("title"):
@@ -200,7 +513,6 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
                 print("Колір знайдено через checked input:", selected_color)
                 return selected_color
 
-        # 3. Якщо checked немає — беремо перший НЕ disabled input
         for input_tag in group.select("input.option--input"):
             if input_tag.has_attr("disabled"):
                 continue
@@ -211,7 +523,6 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
                 print("Колір знайдено через перший доступний input:", title)
                 return title
 
-        # 4. Запасний варіант — перший НЕ disabled label
         for option in group.select(".variant--option"):
             option_classes = option.get("class", [])
             label_tag = option.select_one(".option--label")
@@ -235,10 +546,9 @@ def parse_selected_color_name_from_html(html_text: str) -> str:
 
 def fetch_detail_html_with_fallback(product_url: str) -> dict:
     """
-    Fundis іноді по sale-посиланню ?c=193 віддає HTML,
-    де configurator є, але вибраний color не видно.
+    FUNDIS іноді по sale-посиланню ?c=193 віддає HTML,
+    де configurator є, але колір може бути неочевидний.
 
-    Тому НЕ зупиняємося, якщо configurator є без color.
     Пробуємо:
     1. оригінальне посилання;
     2. посилання без query-параметрів.
@@ -264,7 +574,7 @@ def fetch_detail_html_with_fallback(product_url: str) -> dict:
 
         html_text = fetch_html(url)
 
-        with open("debug_last_tried_detail_page.html", "w", encoding="utf-8") as file:
+        with open("debug_detail_page.html", "w", encoding="utf-8") as file:
             file.write(html_text)
 
         color_name = parse_selected_color_name_from_html(html_text)
@@ -290,7 +600,7 @@ def fetch_detail_html_with_fallback(product_url: str) -> dict:
 
             continue
 
-        print("На цій сторінці не знайдено нормальний configurator. Пробуємо наступний URL...")
+        print("На цій сторінці не знайдено configurator. Пробуємо наступний URL...")
 
         if fallback_result is None:
             fallback_result = {
@@ -311,374 +621,151 @@ def fetch_detail_html_with_fallback(product_url: str) -> dict:
     }
 
 
-# ============================================================
-# Парсинг категорії
-# ============================================================
+def parse_detail_title(soup, base_product=None) -> str:
+    title_tag = soup.select_one(".product--title, h1[itemprop='name'], h1")
 
-def parse_variant_scripts(product_box) -> dict:
-    variants = {}
+    if title_tag:
+        return clean_text(title_tag.get_text(" "))
 
-    scripts = product_box.select("script")
-
-    for script in scripts:
-        script_text = script.get_text(" ", strip=True)
-
-        matches = re.findall(
-            r"mlvpProductData\['([^']+)'\]\s*=\s*(\{.*?\});",
-            script_text,
-            flags=re.DOTALL,
-        )
-
-        for order_number, json_text in matches:
-            try:
-                data = json.loads(json_text)
-                variants[order_number] = data
-            except Exception:
-                continue
-
-    return variants
-
-
-def parse_product_box(product_box, base_url: str, category_type: str) -> dict | None:
-    title_link = product_box.select_one("a.product--title")
-
-    if not title_link:
-        return None
-
-    url = normalize_url(urljoin(base_url, title_link.get("href", "")))
-
-    brand_tag = title_link.select_one("span")
-    brand = clean_text(brand_tag.get_text()) if brand_tag else ""
-
-    full_title = clean_text(title_link.get("title") or title_link.get_text(" "))
-    title = full_title
-
-    article = product_box.get("data-ordernumber", "")
-
-    price_area = product_box.select_one(".product--price-info") or product_box
-    price_data = extract_prices_from_text(price_area.get_text(" "))
-
-    new_price = price_data["new_price"]
-    old_price = price_data["old_price"]
-
-    discount_tag = product_box.select_one(".badge--discount")
-    discount = clean_text(discount_tag.get_text()) if discount_tag else price_data["discount"]
-
-    image_tag = product_box.select_one(".product--image img")
-    main_image = ""
-
-    if image_tag:
-        main_image = (
-                image_tag.get("srcset")
-                or image_tag.get("data-srcset")
-                or image_tag.get("src")
-                or ""
-        )
-
-        main_image = get_first_src_from_srcset(main_image)
-
-    colors = []
-    images = []
-
-    variant_data = parse_variant_scripts(product_box)
-    variant_buttons = product_box.select("a.variant-button")
-
-    for button in variant_buttons:
-        color_name = clean_text(button.get("title") or "")
-
-        order_number = button.get("data-ordernumber", "")
-        variant_url = normalize_url(urljoin(base_url, button.get("href", "")))
-
-        img = button.select_one("img")
-        color_image = ""
-
-        if img:
-            color_image = (
-                    img.get("srcset")
-                    or img.get("data-srcset")
-                    or img.get("src")
-                    or ""
-            )
-
-            color_image = get_first_src_from_srcset(color_image)
-
-        script_data = variant_data.get(order_number, {})
-
-        if script_data:
-            color_name = clean_text(script_data.get("name", color_name))
-
-            variant_url = normalize_url(
-                urljoin(base_url, script_data.get("url", variant_url))
-            )
-
-        price = ""
-
-        if script_data.get("price") is not None:
-            try:
-                price = f"€{float(script_data.get('price')):.2f}"
-            except Exception:
-                price = ""
-
-        color_item = {
-            "name": color_name,
-            "article": order_number,
-            "url": variant_url,
-            "image": color_image,
-            "price": price,
-            "available": script_data.get("is_available", True),
-            "sizes": [],
-        }
-
-        colors.append(color_item)
-
-        if color_image and color_image not in images:
-            images.append(color_image)
-
-    if main_image and main_image not in images:
-        images.insert(0, main_image)
-
-    if not colors:
-        colors.append(
-            {
-                "name": "",
-                "article": article,
-                "url": url,
-                "image": main_image,
-                "price": new_price,
-                "available": True,
-                "sizes": [],
-            }
-        )
-
-    return {
-        "url": url,
-        "category_type": category_type,
-        "title": title,
-        "brand": brand,
-        "article": article,
-        "old_price": old_price,
-        "new_price": new_price,
-        "discount": discount,
-        "colors": colors,
-        "images": images,
-        "status": "Чернетка",
-        "sent": False,
-        "telegram_message_id": None,
-    }
-
-
-def parse_products_from_html(html_text: str, page_url: str, category_type: str) -> list[dict]:
-    soup = BeautifulSoup(html_text, "html.parser")
-    product_boxes = soup.select(".product--box")
-
-    products = []
-
-    for product_box in product_boxes:
-        product = parse_product_box(product_box, page_url, category_type)
-
-        if product:
-            products.append(product)
-
-    return products
-
-
-def parse_category(start_url: str, category_type: str, on_page_products=None) -> dict:
-    start_url = normalize_url(start_url)
-
-    all_new_products = []
-    seen_urls_in_current_run = set()
-
-    pages_parsed = 0
-    products_found = 0
-    skipped_count = 0
-
-    max_pages = 300
-    page_size = get_page_size_from_url(start_url)
-
-    for page_number in range(1, max_pages + 1):
-        page_url = set_page_number(start_url, page_number)
-
-        print(f"Парсимо сторінку: {page_url}")
-
-        try:
-            html_text = fetch_html(page_url)
-        except requests.HTTPError as error:
-            if error.response is not None and error.response.status_code == 404:
-                print("Сторінки закінчилися. Отримали 404, зупиняємо парсинг.")
-                break
-
-            raise error
-
-        page_products = parse_products_from_html(html_text, page_url, category_type)
-
-        print(f"Знайдено товарів на сторінці: {len(page_products)}")
-
-        if not page_products:
-            print("Товарів на сторінці немає. Зупиняємо парсинг.")
-            break
-
-        pages_parsed += 1
-        products_found += len(page_products)
-
-        page_new_products = []
-
-        for product in page_products:
-            product_url = product["url"]
-
-            if product_url in seen_urls_in_current_run:
-                continue
-
-            seen_urls_in_current_run.add(product_url)
-
-            if is_seen_link(product_url) or is_blocked_link(product_url):
-                skipped_count += 1
-                continue
-
-            page_new_products.append(product)
-
-        if page_new_products:
-            all_new_products.extend(page_new_products)
-
-            if on_page_products:
-                on_page_products(page_number, page_url, page_new_products)
-
-        print(f"Нових товарів на сторінці: {len(page_new_products)}")
-
-        if len(page_products) < page_size:
-            print("Це остання сторінка, бо товарів менше ніж розмір сторінки.")
-            break
-
-    return {
-        "start_url": start_url,
-        "category_type": category_type,
-        "pages_parsed": pages_parsed,
-        "products_found": products_found,
-        "new_products": all_new_products,
-        "new_count": len(all_new_products),
-        "skipped_count": skipped_count,
-    }
-
-
-# ============================================================
-# Детальний парсинг товару
-# ============================================================
-
-def parse_detail_images(soup) -> list[str]:
-    images = []
-
-    for image_element in soup.select(".product--image-container .image--element"):
-        for attr in ["data-img-large", "data-img-original", "data-img-small"]:
-            image_url = image_element.get(attr)
-
-            if image_url:
-                images.append(image_url)
-
-    for img in soup.select(".product--image-container img"):
-        image_url = (
-                img.get("srcset")
-                or img.get("data-srcset")
-                or img.get("src")
-                or ""
-        )
-
-        image_url = get_first_src_from_srcset(image_url)
-
-        if image_url and not image_url.startswith("data:image"):
-            images.append(image_url)
-
-    return unique_list(images)
-
-
-def parse_detail_price(soup) -> dict:
-    price_area = soup.select_one(".product--price")
-
-    if price_area:
-        price_text = price_area.get_text(" ")
-    else:
-        price_text = soup.get_text(" ")
-
-    price_data = extract_prices_from_text(price_text)
-
-    discount_tag = soup.select_one(".badge--discount")
-    if discount_tag:
-        price_data["discount"] = clean_text(discount_tag.get_text(" "))
-
-    return price_data
-
-
-def parse_detail_title_brand(soup) -> dict:
-    title_tag = soup.select_one("h1.product--title")
-    if not title_tag:
-        title_tag = soup.select_one("[itemprop='name']")
-    if not title_tag:
-        title_tag = soup.select_one("h1")
-
-    title = clean_text(title_tag.get_text(" ")) if title_tag else ""
-
-    brand = ""
-
-    brand_meta = soup.select_one('[itemprop="brand"] meta[itemprop="name"]')
-    if brand_meta and brand_meta.get("content"):
-        brand = clean_text(brand_meta.get("content"))
-
-    if not brand:
-        brand_img = soup.select_one(".product--supplier img")
-        if brand_img and brand_img.get("alt"):
-            brand = clean_text(brand_img.get("alt"))
-
-    if not brand:
-        brand_link = soup.select_one(".product--supplier a")
-        if brand_link:
-            brand = clean_text(brand_link.get("title") or brand_link.get_text(" "))
-
-    return {
-        "title": title,
-        "brand": brand,
-    }
-
-
-def parse_detail_article(soup) -> str:
-    s_add = soup.select_one('input[name="sAdd"]')
-
-    if s_add and s_add.get("value"):
-        return clean_text(s_add.get("value"))
-
-    order_number_tag = soup.select_one(".entry--sku .entry--content")
-
-    if order_number_tag:
-        return clean_text(order_number_tag.get_text())
+    if base_product:
+        return clean_text(base_product.get("title", ""))
 
     return ""
 
 
-def parse_detail_stock(soup) -> dict:
-    quantity_input = soup.select_one("#sQuantity")
-    buy_button = soup.select_one("#buyboxButton")
+def parse_detail_brand(soup, base_product=None) -> str:
+    brand_meta = soup.select_one("[itemprop='brand'] meta[itemprop='name']")
 
-    max_quantity = ""
+    if brand_meta and brand_meta.get("content"):
+        return clean_text(brand_meta.get("content"))
 
-    if quantity_input:
-        max_quantity = quantity_input.get("max", "")
+    supplier_img = soup.select_one(".product--supplier img")
 
-    is_buyable = False
+    if supplier_img and supplier_img.get("alt"):
+        return clean_text(supplier_img.get("alt"))
 
-    if buy_button:
-        classes = buy_button.get("class", [])
-        disabled = buy_button.has_attr("disabled") or buy_button.get("aria-disabled") == "true"
-        is_buyable = not disabled and "is--disabled" not in classes
+    if base_product:
+        return clean_text(base_product.get("brand", ""))
 
-    delivery_texts = []
+    return ""
 
-    for delivery_tag in soup.select(".product--delivery .delivery--text"):
-        text = clean_text(delivery_tag.get_text(" "))
-        if text:
-            delivery_texts.append(text)
+
+def parse_detail_article(soup, base_product=None) -> str:
+    sku_tag = soup.select_one("[itemprop='sku']")
+
+    if sku_tag:
+        return clean_text(sku_tag.get_text(" "))
+
+    sku_meta = soup.select_one("meta[itemprop='sku'], meta[itemprop='productID']")
+
+    if sku_meta and sku_meta.get("content"):
+        return clean_text(sku_meta.get("content"))
+
+    if base_product:
+        return clean_text(base_product.get("article", ""))
+
+    return ""
+
+
+def parse_detail_prices(soup, base_product=None) -> dict:
+    new_price = ""
+    old_price = ""
+    discount = ""
+
+    new_price_tag = soup.select_one(".product--price .price--content, .price--content.content--default, .price--default")
+
+    if new_price_tag:
+        new_price = clean_price(new_price_tag.get_text(" "))
+
+    if not new_price:
+        price_meta = soup.select_one("meta[itemprop='price']")
+
+        if price_meta and price_meta.get("content"):
+            new_price = "€ " + clean_text(price_meta.get("content"))
+
+    old_price_tag = soup.select_one(".price--line-through, .content--discount .price--line-through")
+
+    if old_price_tag:
+        old_price = clean_price(old_price_tag.get_text(" "))
+
+    discount_tag = soup.select_one(".price--discount-percentage")
+
+    if discount_tag:
+        discount = clean_text(discount_tag.get_text(" "))
+        discount = discount.replace("gespart", "").replace("saved", "")
+        discount = discount.replace("(", "").replace(")", "")
+        discount = discount.strip()
+
+    if not discount:
+        badge_discount = soup.select_one(".badge--discount, .product--badge.badge--discount")
+
+        if badge_discount:
+            discount = clean_text(badge_discount.get_text(" "))
+
+    if base_product:
+        if not new_price:
+            new_price = clean_text(base_product.get("new_price", ""))
+
+        if not old_price:
+            old_price = clean_text(base_product.get("old_price", ""))
+
+        if not discount:
+            discount = clean_text(base_product.get("discount", ""))
 
     return {
-        "is_buyable": is_buyable,
-        "max_quantity": max_quantity,
-        "delivery_text": " · ".join(delivery_texts),
+        "new_price": new_price,
+        "old_price": old_price,
+        "discount": discount,
     }
+
+
+def parse_stock(soup) -> str:
+    stock_tag = soup.select_one(".delivery--information, .product--delivery")
+
+    if stock_tag:
+        return clean_text(stock_tag.get_text(" "))
+
+    availability = soup.select_one("[itemprop='availability']")
+
+    if availability and availability.get("href"):
+        return clean_text(availability.get("href"))
+
+    return ""
+
+
+def parse_detail_images(soup) -> list[str]:
+    images = []
+
+    selectors = [
+        ".product--image-container .image--element",
+        ".image-slider--item .image--element",
+        ".image--thumbnails a",
+        ".product--image-container img",
+    ]
+
+    for selector in selectors:
+        for tag in soup.select(selector):
+            image_url = extract_image_from_tag(tag)
+
+            if image_url:
+                images.append(image_url)
+
+    return unique_list(images)
+
+
+def is_disabled_option(option, input_tag=None, label_tag=None) -> bool:
+    option_classes = option.get("class", []) if option else []
+    label_classes = label_tag.get("class", []) if label_tag else []
+
+    return (
+        "is--disabled" in option_classes
+        or "variant--option--disabled" in option_classes
+        or "is--disabled" in label_classes
+        or option.select_one(".variant-badge--notAvailable") is not None
+        or option.select_one(".variant-badge--notavailable") is not None
+        or option.select_one(".variant-badge--not-available") is not None
+        or (input_tag is not None and input_tag.has_attr("disabled"))
+    )
 
 
 def parse_available_options_for_selected_color(soup) -> list[dict]:
@@ -699,7 +786,6 @@ def parse_available_options_for_selected_color(soup) -> list[dict]:
 
         normalized_group_name = group_name.strip().lower()
 
-        # Колір не додаємо в option_groups, бо він окремо в color.name
         if normalized_group_name in color_group_names:
             continue
 
@@ -717,7 +803,7 @@ def parse_available_options_for_selected_color(soup) -> list[dict]:
             elif label_tag:
                 label_text = label_tag.get_text(" ")
                 label_text = re.sub(
-                    r"sale|notAvailable",
+                    r"sale|notAvailable|not available",
                     "",
                     label_text,
                     flags=re.IGNORECASE
@@ -727,25 +813,16 @@ def parse_available_options_for_selected_color(soup) -> list[dict]:
             if not option_name:
                 continue
 
-            option_classes = option.get("class", [])
-            label_classes = label_tag.get("class", []) if label_tag else []
-
-            is_disabled = (
-                    "is--disabled" in option_classes
-                    or "variant--option--disabled" in option_classes
-                    or "is--disabled" in label_classes
-                    or option.select_one(".variant-badge--notAvailable") is not None
-                    or (input_tag is not None and input_tag.has_attr("disabled"))
-            )
+            disabled = is_disabled_option(option, input_tag, label_tag)
 
             item = {
                 "name": option_name,
-                "available": not is_disabled,
+                "available": not disabled,
             }
 
             all_values.append(item)
 
-            if not is_disabled:
+            if not disabled:
                 available_values.append(option_name)
 
         groups.append(
@@ -759,188 +836,88 @@ def parse_available_options_for_selected_color(soup) -> list[dict]:
     return groups
 
 
-def parse_color_variants_from_listing_product(product: dict) -> list[dict]:
-    color_variants = []
+def parse_color_options(soup, selected_color_name: str, fallback_main_image: str) -> list[dict]:
+    color_group_names = [
+        "color",
+        "colour",
+        "farbe",
+    ]
 
-    for color in product.get("colors", []):
-        color_url = color.get("url") or product.get("url")
-
-        if not color_url:
-            continue
-
-        color_variants.append(
-            {
-                "name": clean_text(color.get("name", "")),
-                "url": normalize_url(color_url),
-                "preview_image": color.get("image", ""),
-                "article": color.get("article", ""),
-                "is_default": False,
-            }
-        )
-
-    if not color_variants:
-        first_image = ""
-
-        if product.get("images") and len(product["images"]) > 0:
-            first_image = product["images"][0]
-
-        color_variants.append(
-            {
-                "name": "",
-                "url": normalize_url(product.get("url", "")),
-                "preview_image": first_image,
-                "article": product.get("article", ""),
-                "is_default": False,
-            }
-        )
-
-    return color_variants
-
-
-def parse_selected_color_detail(
-        color_name: str,
-        color_url: str,
-        fallback_image: str = "",
-        is_default: bool = False,
-) -> dict:
-    detail_page = fetch_detail_html_with_fallback(color_url)
-
-    html_text = detail_page["html"]
-    final_color_url = detail_page["url"]
-
-    with open("debug_detail_page.html", "w", encoding="utf-8") as file:
-        file.write(html_text)
-
-    soup = BeautifulSoup(html_text, "html.parser")
-
-    images = parse_detail_images(soup)
-    prices = parse_detail_price(soup)
-    article = parse_detail_article(soup)
-    stock = parse_detail_stock(soup)
-
-    real_color_name = clean_text(color_name)
-
-    print("Колір із категорії:", real_color_name)
-
-    if not real_color_name or real_color_name.lower() == "default":
-        real_color_name = detail_page.get("color_name", "")
-
-    if not real_color_name:
-        real_color_name = parse_selected_color_name_from_html(html_text)
-
-    if not real_color_name:
-        real_color_name = "Колір не вказано"
-
-    print("Фінальний колір:", real_color_name)
-
-    if images:
-        color_main_image = images[0]
-    else:
-        color_main_image = fallback_image
-
+    price_data = parse_detail_prices(soup)
     option_groups = parse_available_options_for_selected_color(soup)
-
-    return {
-        "name": real_color_name,
-        "url": final_color_url,
-        "article": article,
-        "main_image": color_main_image,
-        "images": images,
-        "old_price": prices["old_price"],
-        "new_price": prices["new_price"],
-        "discount": prices["discount"],
-        "stock": stock,
-        "option_groups": option_groups,
-        "is_default": False,
-    }
-
-
-def parse_product_detail(product_url: str, category_type: str = "", base_product: dict | None = None) -> dict:
-    product_url = normalize_url(product_url)
-
-    detail_page = fetch_detail_html_with_fallback(product_url)
-
-    html_text = detail_page["html"]
-    product_url = detail_page["url"]
-
-    with open("debug_product_main_page.html", "w", encoding="utf-8") as file:
-        file.write(html_text)
-
-    soup = BeautifulSoup(html_text, "html.parser")
-
-    title_brand = parse_detail_title_brand(soup)
-    prices = parse_detail_price(soup)
-    images = parse_detail_images(soup)
-    article = parse_detail_article(soup)
-    stock = parse_detail_stock(soup)
-
-    if base_product:
-        color_variants = parse_color_variants_from_listing_product(base_product)
-    else:
-        color_variants = [
-            {
-                "name": detail_page.get("color_name", ""),
-                "url": product_url,
-                "preview_image": images[0] if images else "",
-                "article": article,
-                "is_default": False,
-            }
-        ]
 
     color_details = []
 
-    for color in color_variants:
-        print(f"Парсимо колір: {color.get('name', '')} — {color['url']}")
+    for group in soup.select(".product--configurator .variant--group"):
+        group_name_tag = group.select_one(".variant--name strong")
 
-        try:
-            color_detail = parse_selected_color_detail(
-                color_name=color.get("name", ""),
-                color_url=color["url"],
-                fallback_image=color.get("preview_image", ""),
-                is_default=color.get("is_default", False),
+        if not group_name_tag:
+            continue
+
+        group_name = clean_text(group_name_tag.get_text(" ")).lower()
+
+        if group_name not in color_group_names:
+            continue
+
+        for option in group.select(".variant--option"):
+            input_tag = option.select_one(".option--input")
+            label_tag = option.select_one(".option--label")
+
+            color_name = ""
+
+            if input_tag and input_tag.get("title"):
+                color_name = clean_text(input_tag.get("title"))
+            elif label_tag:
+                color_name = clean_text(label_tag.get_text(" "))
+
+            if not color_name:
+                continue
+
+            disabled = is_disabled_option(option, input_tag, label_tag)
+
+            if disabled:
+                continue
+
+            color_image = extract_first_image(option)
+
+            if not color_image and color_name == selected_color_name:
+                color_image = fallback_main_image
+
+            if not color_image:
+                color_image = fallback_main_image
+
+            color_details.append(
+                {
+                    "name": color_name,
+                    "main_image": color_image,
+                    "new_price": price_data["new_price"],
+                    "old_price": price_data["old_price"],
+                    "discount": price_data["discount"],
+                    "option_groups": option_groups,
+                    "available": True,
+                }
             )
 
-            color_details.append(color_detail)
+    if not color_details:
+        final_color_name = selected_color_name if selected_color_name else "Колір не вказано"
 
-        except Exception as error:
-            print(f"Не вдалося спарсити колір {color.get('name', '')}: {error}")
+        color_details.append(
+            {
+                "name": final_color_name,
+                "main_image": fallback_main_image,
+                "new_price": price_data["new_price"],
+                "old_price": price_data["old_price"],
+                "discount": price_data["discount"],
+                "option_groups": option_groups,
+                "available": True,
+            }
+        )
 
-    gallery_images = []
-
-    for color in color_details:
-        if color.get("main_image"):
-            gallery_images.append(color["main_image"])
-
-    gallery_images = unique_list(gallery_images)
-
-    telegram_text = build_telegram_text_by_colors(
-        category_type=category_type,
-        title=title_brand["title"],
-        brand=title_brand["brand"],
-        article=article,
-        color_details=color_details,
-        url=product_url,
-    )
-
-    return {
-        "url": product_url,
-        "category_type": category_type,
-        "title": title_brand["title"],
-        "brand": title_brand["brand"],
-        "article": article,
-        "old_price": prices["old_price"],
-        "new_price": prices["new_price"],
-        "discount": prices["discount"],
-        "images": gallery_images,
-        "stock": stock,
-        "color_details": color_details,
-        "telegram_text": telegram_text,
-        "detail_parsed": True,
-    }
+    return color_details
 
 
 # ============================================================
-# Telegram
+# TELEGRAM TEXT
 # ============================================================
 
 def build_telegram_text_by_colors(
@@ -951,13 +928,10 @@ def build_telegram_text_by_colors(
     color_details: list[dict],
     url: str,
 ) -> str:
-    import os
+    personal_link = os.getenv("TELEGRAM_PERSONAL_LINK", "").strip()
 
-    personal_username = os.getenv("TELEGRAM_PERSONAL_USERNAME", "")
-    personal_username = personal_username.replace("@", "").strip()
-
-    if personal_username:
-        order_link = f"https://t.me/{personal_username}"
+    if personal_link:
+        order_link = personal_link
     else:
         order_link = url
 
@@ -986,6 +960,9 @@ def build_telegram_text_by_colors(
 
     if brand:
         meta_parts.append(f"🏷 {html.escape(brand)}")
+
+    if article:
+        meta_parts.append(f"📦 {html.escape(article)}")
 
     if meta_parts:
         lines.append(" · ".join(meta_parts))
@@ -1055,46 +1032,96 @@ def build_telegram_text_by_colors(
     return "\n".join(lines)
 
 
-def normalize_variant_group_name(group_name: str) -> str:
-    group_name_clean = clean_text(group_name)
-    group_name_lower = group_name_clean.lower()
+# ============================================================
+# PRODUCT DETAIL PARSER
+# ============================================================
 
-    translations = {
-        "größe": "size",
-        "groesse": "size",
-        "size": "size",
-        "lenght": "lenght",
-        "length": "length",
-        "width": "width",
-        "height": "height",
-        "form": "form",
+def parse_product_detail(product_url: str, category_type: str = "", base_product=None) -> dict:
+    product_url = normalize_url(product_url)
+
+    detail_page = fetch_detail_html_with_fallback(product_url)
+
+    html_text = detail_page["html"]
+    used_url = detail_page["url"]
+
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    title = parse_detail_title(soup, base_product)
+    brand = parse_detail_brand(soup, base_product)
+    article = parse_detail_article(soup, base_product)
+
+    price_data = parse_detail_prices(soup, base_product)
+    stock = parse_stock(soup)
+
+    selected_color_name = detail_page.get("color_name", "")
+
+    if not selected_color_name:
+        selected_color_name = parse_selected_color_name_from_html(html_text)
+
+    all_detail_images = parse_detail_images(soup)
+
+    fallback_main_image = ""
+
+    if all_detail_images:
+        fallback_main_image = all_detail_images[0]
+    elif base_product and base_product.get("images"):
+        fallback_main_image = base_product.get("images", [""])[0]
+
+    print("Парсимо колір:", selected_color_name, "—", product_url)
+
+    color_details = parse_color_options(
+        soup=soup,
+        selected_color_name=selected_color_name,
+        fallback_main_image=fallback_main_image,
+    )
+
+    print("Колір із категорії:", "")
+    print("Фінальний колір:", color_details[0]["name"] if color_details else "Колір не вказано")
+
+    gallery_images = []
+
+    for color in color_details:
+        if color.get("main_image"):
+            gallery_images.append(color["main_image"])
+
+    gallery_images = unique_list(gallery_images)
+
+    if not gallery_images and fallback_main_image:
+        gallery_images = [fallback_main_image]
+
+    option_groups = []
+
+    if color_details:
+        option_groups = color_details[0].get("option_groups", [])
+
+    telegram_text = build_telegram_text_by_colors(
+        category_type=category_type,
+        title=title,
+        brand=brand,
+        article=article,
+        color_details=color_details,
+        url=used_url,
+    )
+
+    detail = {
+        "title": title,
+        "brand": brand,
+        "article": article,
+        "url": product_url,
+        "detail_url": used_url,
+        "category_type": category_type,
+        "old_price": price_data["old_price"],
+        "new_price": price_data["new_price"],
+        "discount": price_data["discount"],
+        "stock": stock,
+        "images": gallery_images,
+        "all_detail_images": all_detail_images,
+        "color_details": color_details,
+        "colors_detail": color_details,
+        "available_colors": color_details,
+        "variant_groups": option_groups,
+        "telegram_text": telegram_text,
+        "detail_parsed": True,
     }
 
-    return translations.get(group_name_lower, group_name_clean)
-
-def send_custom_post_to_telegram(text: str, photo_urls: list[str]) -> dict:
-    """
-    Відправка ручного поста:
-    - фото посиланнями;
-    - текст.
-    """
-
-    photo_urls = [
-        photo_url.strip()
-        for photo_url in photo_urls
-        if photo_url and photo_url.strip()
-    ]
-
-    sent_photos_result = None
-
-    if len(photo_urls) == 1:
-        sent_photos_result = send_telegram_photo(photo_urls[0])
-    elif len(photo_urls) >= 2:
-        sent_photos_result = send_telegram_media_group(photo_urls[:10])
-
-    sent_message_result = send_telegram_message(text)
-
-    return {
-        "photos": sent_photos_result,
-        "message": sent_message_result,
-    }
+    return detail
