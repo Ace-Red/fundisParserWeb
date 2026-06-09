@@ -9,7 +9,6 @@ from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 from parser.storage import is_seen_link, is_blocked_link
 
-
 BASE_URL = "https://www.fundis-equestrian.com"
 
 HEADERS = {
@@ -171,13 +170,23 @@ def extract_first_image(container) -> str:
 
 def clean_price(value: str) -> str:
     value = clean_text(value)
+    value = html.unescape(value)
 
-    value = value.replace("*", "")
-    value = value.replace("Originally:", "")
-    value = value.replace("Ursprünglich:", "")
-    value = value.replace("RRP:", "")
+    remove_words = [
+        "Originally:",
+        "Ursprünglich:",
+        "RRP:",
+        "inkl. MwSt.",
+        "incl. VAT",
+        "*",
+    ]
+
+    for word in remove_words:
+        value = value.replace(word, "")
+
     value = value.replace("€ ", "€")
     value = value.replace("€&nbsp;", "€")
+    value = value.replace("&nbsp;", " ")
 
     value = re.sub(r"\s+", " ", value)
 
@@ -667,34 +676,69 @@ def parse_detail_article(soup, base_product=None) -> str:
     return ""
 
 
+def get_clean_price_text_from_tag(tag) -> str:
+    """
+    Дістаємо тільки нову ціну.
+    Видаляємо вкладені блоки старої ціни, знижки, іконки.
+    """
+
+    if not tag:
+        return ""
+
+    tag_copy = BeautifulSoup(str(tag), "html.parser")
+
+    for bad_tag in tag_copy.select(
+            ".content--discount, "
+            ".price--line-through, "
+            ".price--discount-percentage, "
+            ".price--pseudo, "
+            ".price--discount-icon, "
+            "meta, "
+            "i"
+    ):
+        bad_tag.decompose()
+
+    return clean_price(tag_copy.get_text(" "))
+
+
 def parse_detail_prices(soup, base_product=None) -> dict:
     new_price = ""
     old_price = ""
     discount = ""
 
-    new_price_tag = soup.select_one(".product--price .price--content, .price--content.content--default, .price--default")
+    # НОВА ЦІНА
+    new_price_tag = soup.select_one(".price--content.content--default")
+
+    if not new_price_tag:
+        new_price_tag = soup.select_one(".product--price .price--content")
 
     if new_price_tag:
-        new_price = clean_price(new_price_tag.get_text(" "))
+        new_price = get_clean_price_text_from_tag(new_price_tag)
 
     if not new_price:
         price_meta = soup.select_one("meta[itemprop='price']")
 
         if price_meta and price_meta.get("content"):
-            new_price = "€ " + clean_text(price_meta.get("content"))
+            new_price = "€" + clean_text(price_meta.get("content"))
 
-    old_price_tag = soup.select_one(".price--line-through, .content--discount .price--line-through")
+    # СТАРА ЦІНА
+    old_price_tag = soup.select_one(".price--line-through")
+
+    if not old_price_tag:
+        old_price_tag = soup.select_one(".price--pseudo .price--discount")
 
     if old_price_tag:
         old_price = clean_price(old_price_tag.get_text(" "))
 
+    # ЗНИЖКА
     discount_tag = soup.select_one(".price--discount-percentage")
 
     if discount_tag:
         discount = clean_text(discount_tag.get_text(" "))
-        discount = discount.replace("gespart", "").replace("saved", "")
-        discount = discount.replace("(", "").replace(")", "")
-        discount = discount.strip()
+        discount = discount.replace("(", "")
+        discount = discount.replace(")", "")
+        discount = discount.replace("gespart", "Saved")
+        discount = clean_text(discount)
 
     if not discount:
         badge_discount = soup.select_one(".badge--discount, .product--badge.badge--discount")
@@ -758,13 +802,13 @@ def is_disabled_option(option, input_tag=None, label_tag=None) -> bool:
     label_classes = label_tag.get("class", []) if label_tag else []
 
     return (
-        "is--disabled" in option_classes
-        or "variant--option--disabled" in option_classes
-        or "is--disabled" in label_classes
-        or option.select_one(".variant-badge--notAvailable") is not None
-        or option.select_one(".variant-badge--notavailable") is not None
-        or option.select_one(".variant-badge--not-available") is not None
-        or (input_tag is not None and input_tag.has_attr("disabled"))
+            "is--disabled" in option_classes
+            or "variant--option--disabled" in option_classes
+            or "is--disabled" in label_classes
+            or option.select_one(".variant-badge--notAvailable") is not None
+            or option.select_one(".variant-badge--notavailable") is not None
+            or option.select_one(".variant-badge--not-available") is not None
+            or (input_tag is not None and input_tag.has_attr("disabled"))
     )
 
 
@@ -921,12 +965,12 @@ def parse_color_options(soup, selected_color_name: str, fallback_main_image: str
 # ============================================================
 
 def build_telegram_text_by_colors(
-    category_type: str,
-    title: str,
-    brand: str,
-    article: str,
-    color_details: list[dict],
-    url: str,
+        category_type: str,
+        title: str,
+        brand: str,
+        article: str,
+        color_details: list[dict],
+        url: str,
 ) -> str:
     personal_link = os.getenv("TELEGRAM_PERSONAL_LINK", "").strip()
 
