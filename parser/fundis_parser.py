@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from parser.storage import is_seen_link, is_blocked_link
+from parser.telegram_sender import send_telegram_photo, send_telegram_media_group, send_telegram_message
 
 HEADERS = {
     "User-Agent": (
