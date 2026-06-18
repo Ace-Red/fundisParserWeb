@@ -123,24 +123,39 @@ def extract_image_from_tag(tag) -> str:
     for attr in [
         "data-img-large",
         "data-img-original",
-        "data-srcset",
-        "srcset",
-        "data-src",
-        "src",
+        "data-img-small",
         "href",
+        "src",
+        "data-src",
     ]:
         value = tag.get(attr)
 
         if not value:
             continue
 
-        if "srcset" in attr:
-            image_url = get_first_url_from_srcset(value)
-        else:
-            image_url = normalize_url(value)
+        image_url = normalize_url(value)
 
         if image_url and not image_url.startswith("data:image"):
             return image_to_large_url(image_url)
+
+    for attr in [
+        "srcset",
+        "data-srcset",
+    ]:
+        value = tag.get(attr)
+
+        if not value:
+            continue
+
+        image_url = get_first_url_from_srcset(value)
+
+        if image_url and not image_url.startswith("data:image"):
+            return image_to_large_url(image_url)
+
+    img_tag = tag.select_one("img")
+
+    if img_tag:
+        return extract_image_from_tag(img_tag)
 
     return ""
 
@@ -777,22 +792,82 @@ def parse_stock(soup) -> str:
     return ""
 
 
+def extract_color_image_from_option(option) -> str:
+    """
+    Беремо фото тільки з кнопки кольору.
+    Наприклад:
+    .variant--option.is--image .image--media img[srcset]
+    """
+
+    if not option:
+        return ""
+
+    img_tag = option.select_one(".image--media img")
+
+    if not img_tag:
+        return ""
+
+    srcset = img_tag.get("srcset", "")
+
+    if srcset:
+        image_url = get_first_url_from_srcset(srcset)
+
+        if image_url:
+            return normalize_url(image_url)
+
+    src = img_tag.get("src", "")
+
+    if src:
+        return normalize_url(src)
+
+    return ""
+
+
 def parse_detail_images(soup) -> list[str]:
+    """
+    Беремо фото тільки з головного блоку фотографій товару.
+
+    Тільки звідси:
+    div.image--box.image-slider--item
+    """
+
     images = []
 
-    selectors = [
-        ".product--image-container .image--element",
-        ".image-slider--item .image--element",
-        ".image--thumbnails a",
-        ".product--image-container img",
-    ]
+    gallery_boxes = soup.select("div.image--box.image-slider--item")
 
-    for selector in selectors:
-        for tag in soup.select(selector):
-            image_url = extract_image_from_tag(tag)
+    for box in gallery_boxes:
+        image_element = box.select_one(".image--element")
 
-            if image_url:
-                images.append(image_url)
+        image_url = ""
+
+        if image_element:
+            for attr in [
+                "data-img-large",
+                "data-img-original",
+                "data-img-small",
+            ]:
+                value = image_element.get(attr)
+
+                if value:
+                    image_url = normalize_url(value)
+                    break
+
+        if not image_url:
+            img_tag = box.select_one(".image--media img")
+
+            if img_tag:
+                srcset = img_tag.get("srcset", "")
+
+                if srcset:
+                    image_url = get_first_url_from_srcset(srcset)
+
+                if not image_url:
+                    image_url = img_tag.get("src", "")
+
+                image_url = normalize_url(image_url)
+
+        if image_url and not image_url.startswith("data:image"):
+            images.append(image_url)
 
     return unique_list(images)
 
@@ -922,14 +997,12 @@ def parse_color_options(soup, selected_color_name: str, fallback_main_image: str
             if disabled:
                 continue
 
-            color_image = extract_first_image(option)
+            color_image = extract_color_image_from_option(option)
 
             if not color_image and color_name == selected_color_name:
                 color_image = fallback_main_image
-
             if not color_image:
                 color_image = fallback_main_image
-
             color_details.append(
                 {
                     "name": color_name,
@@ -1124,14 +1197,48 @@ def parse_product_detail(product_url: str, category_type: str = "", base_product
 
     gallery_images = []
 
+    # 1. Спочатку беремо головні фото доступних кольорів
+    gallery_images = []
+
     for color in color_details:
         if color.get("main_image"):
             gallery_images.append(color["main_image"])
 
+    gallery_images.extend(all_detail_images)
+
     gallery_images = unique_list(gallery_images)
 
-    if not gallery_images and fallback_main_image:
-        gallery_images = [fallback_main_image]
+    if not gallery_images and base_product and base_product.get("images"):
+        gallery_images = unique_list(base_product.get("images", []))
+
+    # 2. Фото, які вже були у JSON-об'єкті товару
+    json_object_images = []
+
+    if base_product and base_product.get("images"):
+        json_object_images.extend(base_product.get("images", []))
+
+    if base_product and base_product.get("all_detail_images"):
+        json_object_images.extend(base_product.get("all_detail_images", []))
+
+    # 3. Усі можливі fallback-фото
+    fallback_images = []
+
+    fallback_images.extend(gallery_images)
+    fallback_images.extend(json_object_images)
+    fallback_images.extend(all_detail_images)
+
+    for color in color_details:
+        if color.get("main_image"):
+            fallback_images.append(color["main_image"])
+
+    fallback_images = unique_list(fallback_images)
+
+    # 4. Якщо фото кольорів не знайдені,
+    # тоді показуємо фото з JSON-об'єкта
+    if not gallery_images:
+        gallery_images = unique_list(json_object_images)
+
+    # 5. Якщо взагалі нічого немає — залишаємо порожній список
 
     option_groups = []
 

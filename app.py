@@ -20,7 +20,6 @@ from parser.telegram_sender import (
     send_custom_post_to_telegram,
 )
 
-
 app = Flask(__name__)
 app.secret_key = "fundis_parser_secret_key"
 
@@ -360,6 +359,31 @@ def clear_data():
     flash("Дані очищено. Товари та список переглянутих посилань видалені.", "success")
 
     return redirect(url_for("index"))
+
+
+@app.route("/update-product-manual", methods=["POST"])
+def update_product_manual():
+    product_url = request.form.get("product_url", "").strip()
+    telegram_text = request.form.get("telegram_text", "").strip()
+    images = request.form.getlist("images[]")
+
+    images = [
+        image.strip()
+        for image in images
+        if image.strip()
+    ]
+
+    products = load_products()
+
+    for product in products:
+        if product.get("url") == product_url or product.get("detail_url") == product_url:
+            product["images"] = images
+            product["telegram_text"] = telegram_text
+            break
+
+    save_products(products)
+
+    return redirect(request.referrer or url_for("index"))
 
 
 if __name__ == "__main__":

@@ -29,20 +29,24 @@
             </div>
 
             <!-- Фото товара -->
-            <div class="detail-gallery">
-                {% if product.images and product.images|length > 0 %}
-                    {% for image in product.images[:12] %}
-                        <div class="detail-image-box">
-                            <img src="{{ image }}" alt="{{ product.title }}">
-                        </div>
+            {% if product.images and product.images|length > 0 %}
+                <div
+                        class="detail-gallery"
+                        data-fallback-images='{{ product.fallback_images|default(product.images)|tojson }}'
+                >
+                    {% for image in product.images %}
+                        {% if image %}
+                            <div class="detail-image-box">
+                                <img
+                                        src="{{ image }}"
+                                        alt="{{ product.title }}"
+                                        onerror="showFallbackImagesFromJson(this);"
+                                >
+                            </div>
+                        {% endif %}
                     {% endfor %}
-                {% else %}
-                    <div class="empty-state">
-                        <div class="empty-icon">📷</div>
-                        <p>Фото не знайдені.</p>
-                    </div>
-                {% endif %}
-            </div>
+                </div>
+            {% endif %}
 
             <!-- Цена товара -->
             <div class="detail-price-box">
@@ -120,15 +124,15 @@
                         <div class="color-detail-card">
 
                             <!-- Фото цвета -->
-                            <div class="color-detail-image">
-                                {% if color.main_image %}
-                                    <img src="{{ color.main_image }}" alt="{{ color.name }}">
-                                {% elif color.images and color.images|length > 0 %}
-                                    <img src="{{ color.images[0] }}" alt="{{ color.name }}">
-                                {% else %}
-                                    🛍️
-                                {% endif %}
-                            </div>
+                            {% if color.main_image %}
+                                <div class="color-detail-image">
+                                    <img
+                                            src="{{ color.main_image }}"
+                                            alt="{{ color.name }}"
+                                            onerror="this.parentElement.remove();"
+                                    >
+                                </div>
+                            {% endif %}
 
                             <!-- Информация цвета -->
                             <div class="color-detail-info">
@@ -245,20 +249,54 @@
 
         <!-- Текст для Telegram -->
         <!-- Текст для Telegram -->
+        <!-- Редактирование фото и Telegram -->
         <div class="pink-card">
 
-            <div class="section-header">
-                <h2>
-                    <i class="bi bi-send-heart"></i>
-                    Текст для Telegram
-                </h2>
+            <form method="POST" action="{{ url_for('update_product_manual') }}" class="manual-edit-form">
+                <input type="hidden" name="product_url" value="{{ product.url }}">
 
-                {% if product.telegram_sent %}
-                    <span class="status-ready">Вже відправлено</span>
-                {% endif %}
-            </div>
+                <div class="manual-section">
+                    <h3>🖼 Фото товару</h3>
 
-            <textarea class="telegram-textarea" rows="15" readonly>{{ product.telegram_text }}</textarea>
+                    <div id="images-editor">
+                        {% if product.images %}
+                            {% for image in product.images %}
+                                <div class="image-edit-row">
+                                    <input
+                                            type="text"
+                                            name="images[]"
+                                            value="{{ image }}"
+                                            placeholder="Посилання на фото"
+                                            class="form-control"
+                                    >
+
+                                    <button type="button" class="btn btn-danger" onclick="removeImageRow(this)">
+                                        Видалити
+                                    </button>
+                                </div>
+                            {% endfor %}
+                        {% endif %}
+                    </div>
+
+                    <button type="button" class="btn btn-secondary" onclick="addImageRow()">
+                        + Додати фото
+                    </button>
+                </div>
+
+                <div class="manual-section">
+                    <h3>💬 Текст для Telegram</h3>
+
+                    <textarea
+                            name="telegram_text"
+                            rows="14"
+                            class="form-control telegram-textarea"
+                    >{{ product.telegram_text }}</textarea>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    💾 Зберегти зміни
+                </button>
+            </form>
 
             <div class="actions-row">
                 <form action="{{ url_for('send_product_telegram', product_index=product_index) }}" method="POST">
@@ -274,3 +312,95 @@
     </div>
 
 {% endblock %}
+<script>
+    function addImageRow() {
+        const container = document.getElementById("images-editor");
+
+        const row = document.createElement("div");
+        row.className = "image-edit-row";
+
+        row.innerHTML = `
+        <input
+            type="text"
+            name="images[]"
+            placeholder="Посилання на фото"
+            class="form-control"
+        >
+
+        <button type="button" class="btn btn-danger" onclick="removeImageRow(this)">
+            Видалити
+        </button>
+    `;
+
+        container.appendChild(row);
+    }
+
+    function removeImageRow(button) {
+        const row = button.closest(".image-edit-row");
+
+        if (row) {
+            row.remove();
+        }
+    }
+
+    function showFallbackImagesFromJson(img) {
+        const failedBox = img.parentElement;
+        const gallery = failedBox ? failedBox.parentElement : null;
+
+        if (!gallery) {
+            if (failedBox) {
+                failedBox.remove();
+            }
+
+            return;
+        }
+
+        if (failedBox) {
+            failedBox.remove();
+        }
+
+        if (gallery.dataset.fallbackLoaded === "1") {
+            return;
+        }
+
+        gallery.dataset.fallbackLoaded = "1";
+
+        let fallbackImages = [];
+
+        try {
+            fallbackImages = JSON.parse(gallery.dataset.fallbackImages || "[]");
+        } catch (error) {
+            fallbackImages = [];
+        }
+
+        const existingImages = Array.from(gallery.querySelectorAll("img")).map(function (existingImg) {
+            return existingImg.getAttribute("src");
+        });
+
+        fallbackImages.forEach(function (imageUrl) {
+            if (!imageUrl) {
+                return;
+            }
+
+            if (existingImages.includes(imageUrl)) {
+                return;
+            }
+
+            const imageBox = document.createElement("div");
+            imageBox.className = "detail-image-box";
+
+            const newImage = document.createElement("img");
+            newImage.src = imageUrl;
+            newImage.alt = "Фото товару";
+
+            newImage.onerror = function () {
+                if (this.parentElement) {
+                    this.parentElement.remove();
+                }
+            };
+
+            imageBox.appendChild(newImage);
+            gallery.appendChild(imageBox);
+        });
+    }
+</script>
